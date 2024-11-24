@@ -1,72 +1,45 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using Microsoft.IdentityModel.Tokens;
-using System.Security.Claims;
-using System.Security.Cryptography;
 using AuthService.Models;
-using System.Text;
-using System.IdentityModel.Tokens.Jwt;
+using AuthService.Business.Interfaces;
+using AuthService.Models.Refresh;
 
 [ApiController]
 [Route("api/[controller]")]
 public class AuthController : ControllerBase
 {
-    private readonly RsaSecurityKey _privateKey;
-    private readonly RsaSecurityKey _publicKey;
-    private readonly string _issuer;
-    private readonly string _audience;
+  
+    private readonly IAuthBusiness _authBusiness;
 
-    public AuthController(IConfiguration configuration)
+    public AuthController(IAuthBusiness authBusiness)
     {
-        // Carregar as configurações do appsettings.json
-        _issuer = configuration["Jwt:Issuer"];
-        _audience = configuration["Jwt:Audience"];
-
-        // Carregar a chave privada
-        var privateKeyPath = configuration["Jwt:PrivateKeyPath"];
-        if (string.IsNullOrEmpty(privateKeyPath) || !System.IO.File.Exists(privateKeyPath))
-        {
-            throw new FileNotFoundException($"Private key file not found at {privateKeyPath}");
-        }
-
-        var rsaPrivate = RSA.Create();
-        rsaPrivate.ImportFromPem(System.IO.File.ReadAllText(privateKeyPath).ToCharArray());
-        _privateKey = new RsaSecurityKey(rsaPrivate);
+        _authBusiness = authBusiness;
     }
 
     [HttpPost("login")]
-    public IActionResult Login([FromBody] LoginModel login)
+    public async Task<IActionResult> Login([FromBody] LoginModel login)
     {
-        // Simulação de validação de credenciais
-        if (login.Username != "testuser" || login.Password != "testpassword")
+        try
         {
-            return Unauthorized("Invalid credentials");
+            var (accessToken, refreshToken) = await _authBusiness.LoginAsync(login.Username, login.Password);
+            return Ok(new { accessToken, refreshToken });
         }
-
-        // Gerar Claims para o Token
-        var claims = new[]
+        catch (UnauthorizedAccessException ex)
         {
-            new Claim(JwtRegisteredClaimNames.Sub, login.Username),
-            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            new Claim(ClaimTypes.Role, "User")
-        };
+            return Unauthorized(ex.Message);
+        }
+    }
 
-        // Configurar o token JWT
-        var tokenHandler = new JwtSecurityTokenHandler();
-        var tokenDescriptor = new SecurityTokenDescriptor
+    [HttpPost("refresh")]
+    public async Task<IActionResult> Refresh([FromBody] RefreshRequest request)
+    {
+        try
         {
-            Subject = new ClaimsIdentity(claims),
-            Expires = DateTime.UtcNow.AddMinutes(30),
-            SigningCredentials = new SigningCredentials(_privateKey, SecurityAlgorithms.RsaSha256),
-            Issuer = "YourAuthService",
-            Audience = "YourMicroservices"
-        };
-
-        var token = tokenHandler.CreateToken(tokenDescriptor);
-
-        return Ok(new
+            var (newAccessToken, newRefreshToken) = await _authBusiness.RefreshAsync(request.UserId, request.RefreshToken);
+            return Ok(new { accessToken = newAccessToken, refreshToken = newRefreshToken });
+        }
+        catch (UnauthorizedAccessException ex)
         {
-            token = tokenHandler.WriteToken(token),
-            expires = tokenDescriptor.Expires
-        });
+            return Unauthorized(ex.Message);
+        }
     }
 }
